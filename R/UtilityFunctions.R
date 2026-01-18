@@ -724,3 +724,157 @@ getSignGenes <- function(whichSign) {
     scores <- rescale(scores)
     return(scores)
 }
+
+
+#' Evaluation (Scores) of Signatures
+#'
+#' Returns goodness scores goodness of a signature for the user's dataset.
+#'
+#' @param data an object of type \linkS4class{SummarizedExperiment}. Output of
+#' the signatures functions.
+#' @param nametype character string saying the type of gene name ID (row names
+#' in data). Either one of "SYMBOL", "ENTREZID" or "ENSEMBL".
+#' @param whichSign character vector saying the signatures to plot. These must
+#' be signatures computed with signifinder. If not specified, all the
+#' signatures inside data will be plotted.
+#' @param whichAssay integer scalar or string indicating which assay of
+#' data to use.
+#' @param sampleAnnot character vector containing samples' annotations.
+#' @param selectByAnnot character string saying the subgroup from `sampleAnnot`
+#' used to compute the evaluation plot.
+#'
+#' @return A data frame with 12 variables:
+#' \describe{
+#'   \item{signature}{name of the signature}
+#'   \item{scoreLabel}{label of the signature when added inside colData section}
+#'   \item{functionName}{name of the function to use to compute the signature}
+#'   \item{topic}{main cancer topic of the signature}
+#'   \item{tumor}{tumor type for which the signature was developed}
+#'   \item{tissue}{tumor tissue for which the signature was developed}
+#'   \item{cellType}{cell type for which the signature was developed}
+#'   \item{requiredInput}{type of data with which the signature was developed}
+#'   \item{transformationStep}{data transformation step performed inside the
+#'   function starting from the user's 'normArray' or 'normCounts' data}
+#'   \item{author}{first author of the work in which the signature is described}
+#'   \item{reference}{reference of the work}
+#'   \item{description}{signature description and how to evaluate its score}
+#'   ...
+#' }
+#'
+#' @importFrom SummarizedExperiment colData
+#' @importFrom cowplot plot_grid
+#' @importFrom stats cor
+#'
+#' @examples
+#' data(ovse)
+#' evaluationSigns(data = ovse)
+#'
+#' @export
+evaluationSigns <- function(
+        data, nametype = "SYMBOL", whichSign = NULL, whichAssay = "norm_expr",
+        sampleAnnot = NULL, selectByAnnot = NULL){
+
+    if (!is.null(whichSign)) {
+        if (!all(whichSign %in% SignatureNames)) {
+            stop(paste(
+                "signatures must be among:",
+                paste(SignatureNames, collapse = ", ")))}
+        .signatureNameCheck(data, whichSign) }
+
+    if (!(nametype %in% c("SYMBOL", "ENTREZID", "ENSEMBL"))) {
+        stop("The name of genes must be either SYMBOL, ENTREZID or ENSEMBL")}
+
+    if (!is.null(sampleAnnot)) {
+        if (length(sampleAnnot) != ncol(data)) { stop(
+            "sampleAnnot length is different than samples dimension")}
+        if (!is.null(selectByAnnot)) {
+            if (!(selectByAnnot %in% sampleAnnot)) { stop(
+                "selectByAnnot is not present in sampleAnnot")}
+        } else { stop(
+            "sampleAnnot can be used only if selectByAnnot is also provided")}
+    } else {
+        if (!is.null(selectByAnnot)) { stop(
+            "selectByAnnot can be used only if sampleAnnot is also provided")}}
+
+    if (!is.null(sampleAnnot)) {
+        if (!is.null(selectByAnnot)) {
+            data <- data[, sampleAnnot == selectByAnnot] }}
+
+    dataset <- .getMatrix(data, whichAssay)
+
+    if (sum(colnames(colData(data)) %in% SignatureNames) > 0) {
+        if (is.null(whichSign)) {
+            signs <- intersect(SignatureNames, colnames(colData(data)))
+        } else {
+            signs <- Reduce(
+                intersect,
+                list(whichSign, SignatureNames, colnames(colData(data)))) }
+    } else {stop("There are no signatures computed with signifinder in data")}
+
+    n_sign <- length(signs)
+
+    dataset_genes <- rownames(dataset)
+    coverage_conte <- colSums(dataset)
+    percentage_zeros <- apply(dataset, 2, function(x){sum(x==0)/length(x)})
+
+    res <- lapply(signs, function(x) {
+
+        sign_genes <- .GetGenes(x)[,"Gene"]
+        sign_genes <- .geneIDtrans(nametype, sign_genes)
+        shared <- intersect(dataset_genes, sign_genes)
+        n_shared <- length(shared)
+        n_all <- length(sign_genes)
+        perc_genes <- n_shared/n_all*100
+        if (n_shared==1){
+            perc_zero <- ifelse(dataset[shared,]==0, 100, 0)
+        } else {
+            perc_zero <- (apply(dataset[shared,]==0, 2, sum) / n_shared) * 100}
+
+        score <- colData(data)[,x]
+
+        c_conte <- coverage_conte[!is.na(score)]
+        z_conte <- percentage_zeros[!is.na(score)]
+        i <- score[!is.na(score)]
+        coverage_cor <- cor(x = c_conte, i)
+        zeros_cor <- cor(x = z_conte, i)
+
+        goodness <- (2*perc_genes + 2*(100-median(perc_zero)) +
+            (1-abs(coverage_cor))*100 + (1-abs(zeros_cor))*100)/6
+        goodTab <- c(perc_genes, 100-median(perc_zero), (
+            1-abs(coverage_cor))*50, (1-abs(zeros_cor))*50)
+
+        list(perc_genes, perc_zero, coverage_cor, zeros_cor, goodness, goodTab)
+    })
+    names(res) <- signs
+    goodness = unlist(lapply(res, function(x) round(x[[5]], 1) ))
+
+    matrix_percent_zeros = do.call(rbind, lapply(
+        seq_along(signs), function(x)
+            data.frame(p_zeros = res[[x]][[2]], signature = signs[x]) ))
+
+    matrix_percent_zeros$signature = factor(
+        matrix_percent_zeros$signature, levels = names(sort(goodness)))
+    goodTab = do.call(rbind, lapply(seq_along(res), function(x){
+        data.frame(
+            "class" = c("perc_genes", "perc_zero", "cov_cor", "zero_cor"),
+            "signature" = rep(signs[x], 4), "len" = res[[x]][[6]]/3 )
+    }))
+    goodTab$signature = factor(
+        goodTab$signature, levels = names(sort(goodness)))
+    goodTab$class = factor(
+        goodTab$class, levels = c(
+            "zero_cor", "cov_cor", "perc_zero", "perc_genes"))
+
+    df <- data.frame (
+        perc_genes = unlist(lapply(res, function(x) round(x[[1]], 2) )),
+        coverage_cor = unlist(lapply(res, function(x) round(x[[3]], 2) )),
+        zeros_cor = unlist(lapply(res, function(x) round(x[[4]], 2) )),
+        order_sign = factor(signs, levels = names(sort(goodness))),
+        goodness = goodness,
+        goodTab = goodTab,
+        matrix_precent_zeros = matrix_precent_zeros,
+    )
+    df <- merge(df, res)
+
+    return(df)
+}

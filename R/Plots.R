@@ -618,106 +618,15 @@ evaluationSignPlot <- function(
         data, nametype = "SYMBOL", whichSign = NULL, whichAssay = "norm_expr",
         sampleAnnot = NULL, selectByAnnot = NULL){
 
-    if (!is.null(whichSign)) {
-        if (!all(whichSign %in% SignatureNames)) {
-            stop(paste(
-                "signatures must be among:",
-                paste(SignatureNames, collapse = ", ")))}
-        .signatureNameCheck(data, whichSign) }
+    # Dataframe of score, etc.  See R/UtilityFunctions.R::evaluationSign
+    eSigns <- evaluationSigns(data, nametype, whichSign, whichAssay, sampleAnnot, selectByAnnot)
 
-    if (!(nametype %in% c("SYMBOL", "ENTREZID", "ENSEMBL"))) {
-        stop("The name of genes must be either SYMBOL, ENTREZID or ENSEMBL")}
-
-    if (!is.null(sampleAnnot)) {
-        if (length(sampleAnnot) != ncol(data)) { stop(
-            "sampleAnnot length is different than samples dimension")}
-        if (!is.null(selectByAnnot)) {
-            if (!(selectByAnnot %in% sampleAnnot)) { stop(
-                "selectByAnnot is not present in sampleAnnot")}
-        } else { stop(
-            "sampleAnnot can be used only if selectByAnnot is also provided")}
-    } else {
-        if (!is.null(selectByAnnot)) { stop(
-            "selectByAnnot can be used only if sampleAnnot is also provided")}}
-
-    if (!is.null(sampleAnnot)) {
-        if (!is.null(selectByAnnot)) {
-            data <- data[, sampleAnnot == selectByAnnot] }}
-
-    dataset <- .getMatrix(data, whichAssay)
-
-    if (sum(colnames(colData(data)) %in% SignatureNames) > 0) {
-        if (is.null(whichSign)) {
-            signs <- intersect(SignatureNames, colnames(colData(data)))
-        } else {
-            signs <- Reduce(
-                intersect,
-                list(whichSign, SignatureNames, colnames(colData(data)))) }
-    } else {stop("There are no signatures computed with signifinder in data")}
-
-    n_sign <- length(signs)
-
-    dataset_genes <- rownames(dataset)
-    coverage_conte <- colSums(dataset)
-    percentage_zeros <- apply(dataset, 2, function(x){sum(x==0)/length(x)})
-
-    res <- lapply(signs, function(x) {
-
-        sign_genes <- .GetGenes(x)[,"Gene"]
-        sign_genes <- .geneIDtrans(nametype, sign_genes)
-        shared <- intersect(dataset_genes, sign_genes)
-        n_shared <- length(shared)
-        n_all <- length(sign_genes)
-        perc_genes <- n_shared/n_all*100
-        if (n_shared==1){
-            perc_zero <- ifelse(dataset[shared,]==0, 100, 0)
-        } else {
-            perc_zero <- (apply(dataset[shared,]==0, 2, sum) / n_shared) * 100}
-
-        score <- colData(data)[,x]
-
-        c_conte <- coverage_conte[!is.na(score)]
-        z_conte <- percentage_zeros[!is.na(score)]
-        i <- score[!is.na(score)]
-        coverage_cor <- cor(x = c_conte, i)
-        zeros_cor <- cor(x = z_conte, i)
-
-        goodness <- (2*perc_genes + 2*(100-median(perc_zero)) +
-            (1-abs(coverage_cor))*100 + (1-abs(zeros_cor))*100)/6
-        goodTab <- c(perc_genes, 100-median(perc_zero), (
-            1-abs(coverage_cor))*50, (1-abs(zeros_cor))*50)
-
-        list(perc_genes, perc_zero, coverage_cor, zeros_cor, goodness, goodTab)
-    })
-    names(res) <- signs
-
-    perc_genes <- unlist(lapply(res, function(x) round(x[[1]], 2) ))
-    matrix_percent_zeros <- do.call(rbind, lapply(
-        seq_along(signs), function(x)
-            data.frame(p_zeros = res[[x]][[2]], signature = signs[x]) ))
-    coverage_cor <- unlist(lapply(res, function(x) round(x[[3]], 2) ))
-    zeros_cor <- unlist(lapply(res, function(x) round(x[[4]], 2) ))
-    goodness <- unlist(lapply(res, function(x) round(x[[5]], 1) ))
-    order_sign <- factor(signs, levels = names(sort(goodness)))
-    matrix_percent_zeros$signature <- factor(
-        matrix_percent_zeros$signature, levels = names(sort(goodness)))
-    goodTab <- do.call(rbind, lapply(seq_along(res), function(x){
-        data.frame(
-            "class" = c("perc_genes", "perc_zero", "cov_cor", "zero_cor"),
-            "signature" = rep(signs[x], 4), "len" = res[[x]][[6]]/3 )
-    }))
-    goodTab$signature <- factor(
-        goodTab$signature, levels = names(sort(goodness)))
-    goodTab$class <- factor(
-        goodTab$class, levels = c(
-            "zero_cor", "cov_cor", "perc_zero", "perc_genes"))
-
-    g0 <- ggplot(mapping = aes(x = goodTab$len, y = goodTab$signature)) +
+    g0 <- ggplot(mapping = aes(x = esigns$goodTab$len, y = esigns$goodTab$signature)) +
         geom_bar(aes(
-            fill = goodTab$class), stat = "identity", show.legend = FALSE) +
+            fill = esigns$goodTab$class), stat = "identity", show.legend = FALSE) +
         geom_text(aes(
-            x = goodness+.1, y = order_sign,
-            label = as.character(goodness), hjust = 0)) +
+            x = esigns$goodness+.1, y = order_sign,
+            label = as.character(esigns$goodness), hjust = 0)) +
         xlim(0, 102) +
         scale_fill_manual(values = c(
             "perc_genes" = "#eec55a", "perc_zero" = "#7474cc",
@@ -726,11 +635,11 @@ evaluationSignPlot <- function(
         theme_minimal() +
         theme(axis.title.y = element_blank(), axis.ticks.y = element_blank())
 
-    g1 <- ggplot(mapping = aes(x = perc_genes, y = order_sign)) +
+    g1 <- ggplot(mapping = aes(x = esigns$perc_genes, y = esigns$order_sign)) +
         geom_bar(stat = "identity", color = "#eec55a", fill = "#eec55a") +
         geom_text(aes(
             x = 8, y = order_sign, label = paste0(
-                as.character(round(perc_genes)), "%"), hjust = 0)) +
+                as.character(round(esigns$perc_genes)), "%"), hjust = 0)) +
         xlim(0, 100) +
         labs(x = "% of signature genes\nin the dataset") +
         theme_light() +
@@ -738,7 +647,7 @@ evaluationSignPlot <- function(
               axis.ticks.y = element_blank())
 
     g2 <- ggplot(mapping = aes(
-        x = matrix_percent_zeros$p_zeros, y = matrix_percent_zeros$signature)) +
+        x = esigns$matrix_percent_zeros$p_zeros, y = esigns$matrix_percent_zeros$signature)) +
         geom_boxplot(outlier.size = 1, fill = "#ababe0", color = "#7474cc") +
         labs(x = "% of zero values\nof signature genes") + xlim(0, 100) +
         theme_light() +
@@ -748,9 +657,9 @@ evaluationSignPlot <- function(
     color_point <- c("coverage" = "#C08497", "zeros" = "#76bce4")
     g3 <- ggplot() +
         geom_vline(xintercept = 0, linetype = "dashed") +
-        geom_point(aes(x = coverage_cor, y = order_sign,
+        geom_point(aes(x = esigns$coverage_cor, y = esigns$order_sign,
                        color = "coverage"), size = 2) +
-        geom_point(aes(x = zeros_cor, y = order_sign,
+        geom_point(aes(x = esigns$zeros_cor, y = esigns$order_sign,
                        color = "zeros"), size = 2) +
         xlim(-1, 1) +
         labs(x = "correlation") +
